@@ -61,7 +61,6 @@ class Packaging {
 
 		this.metadata.direction = spineNode.getAttribute("page-progression-direction");
 
-
 		return {
 			"metadata" : this.metadata,
 			"spine"    : this.spine,
@@ -101,6 +100,7 @@ class Packaging {
 		metadata.flow = this.getPropertyText(xml, "rendition:flow");
 		metadata.viewport = this.getPropertyText(xml, "rendition:viewport");
 		metadata.media_active_class = this.getPropertyText(xml, "media:active-class");
+		metadata.spread = this.getPropertyText(xml, "rendition:spread");
 		// metadata.page_prog_dir = packageXml.querySelector("spine").getAttribute("page-progression-direction");
 
 		return metadata;
@@ -256,23 +256,23 @@ class Packaging {
 	findCoverPath(packageXml){
 		var pkg = qs(packageXml, "package");
 		var epubVersion = pkg.getAttribute("version");
+		
+		// Try parsing cover with epub 3.
+		// var node = packageXml.querySelector("item[properties='cover-image']");
+		var node = qsp(packageXml, "item", {"properties":"cover-image"});
+		if (node) return node.getAttribute("href");
+		
+		// Fallback to epub 2.
+		var metaCover = qsp(packageXml, "meta", {"name":"cover"});
 
-		if (epubVersion === "2.0") {
-			var metaCover = qsp(packageXml, "meta", {"name":"cover"});
-			if (metaCover) {
-				var coverId = metaCover.getAttribute("content");
-				// var cover = packageXml.querySelector("item[id='" + coverId + "']");
-				var cover = packageXml.getElementById(coverId);
-				return cover ? cover.getAttribute("href") : "";
-			}
-			else {
-				return false;
-			}
+		if (metaCover) {
+			var coverId = metaCover.getAttribute("content");
+			// var cover = packageXml.querySelector("item[id='" + coverId + "']");
+			var cover = packageXml.getElementById(coverId);
+			return cover ? cover.getAttribute("href") : "";
 		}
 		else {
-			// var node = packageXml.querySelector("item[properties='cover-image']");
-			var node = qsp(packageXml, "item", {"properties":"cover-image"});
-			return node ? node.getAttribute("href") : "";
+			return false;
 		}
 	}
 

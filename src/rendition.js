@@ -53,7 +53,8 @@ class Rendition {
 			stylesheet: null,
 			resizeOnOrientationChange: true,
 			script: null,
-			snap: false
+			snap: false,
+			defaultDirection: "ltr"
 		});
 
 		extend(this.settings, options);
@@ -146,6 +147,7 @@ class Rendition {
 		 * @memberof Rendition
 		 */
 		this.started = this.starting.promise;
+
 		// Block the queue until rendering is started
 		this.q.enqueue(this.start);
 	}
@@ -206,6 +208,14 @@ class Rendition {
 		if (!this.settings.layout && (this.book.package.metadata.layout === "pre-paginated" || this.book.displayOptions.fixedLayout === "true")) {
 			this.settings.layout = "pre-paginated";
 		}
+		switch(this.book.package.metadata.spread) {
+			case 'none':
+				this.settings.spread = 'none';
+				break;
+			case 'both':
+				this.settings.spread = true;
+				break;
+		}
 
 		if(!this.manager) {
 			this.ViewManager = this.requireManager(this.settings.manager);
@@ -219,7 +229,7 @@ class Rendition {
 			});
 		}
 
-		this.direction(this.book.package.metadata.direction);
+		this.direction(this.book.package.metadata.direction || this.settings.defaultDirection);
 
 		// Parse metadata to get layout props
 		this.settings.globalLayoutProperties = this.determineLayoutProperties(this.book.package.metadata);
@@ -878,13 +888,13 @@ class Rendition {
 	/**
 	 * Emit a selection event's CFI Range passed from a a view
 	 * @private
-	 * @param  {EpubCFI} cfirange
+	 * @param  {string} cfirange
 	 */
 	triggerSelectedEvent(cfirange, contents){
 		/**
 		 * Emit that a text selection has occured
 		 * @event selected
-		 * @param {EpubCFI} cfirange
+		 * @param {string} cfirange
 		 * @param {Contents} contents
 		 * @memberof Rendition
 		 */

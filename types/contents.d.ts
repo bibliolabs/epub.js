@@ -28,13 +28,15 @@ export default class Contents {
 
     addStylesheet(src: string): Promise<boolean>;
 
-    addStylesheetRules(rules: Array<object> | object): Promise<boolean>;
+    addStylesheetRules(rules: Array<object> | object, key: string): Promise<boolean>;
+
+    addStylesheetCss(serializedCss: string, key: string): Promise<boolean>;
 
     cfiFromNode(node: Node, ignoreClass?: string): string;
 
     cfiFromRange(range: Range, ignoreClass?: string): string;
 
-    columns(width: number, height: number, columnWidth: number, gap: number): void;
+    columns(width: number, height: number, columnWidth: number, gap: number, dir: string): void;
 
     contentHeight(h: number): number;
 

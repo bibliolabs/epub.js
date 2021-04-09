@@ -1,7 +1,7 @@
 import {substitute} from "./utils/replacements";
 import {createBase64Url, createBlobUrl, blob2base64} from "./utils/core";
 import Url from "./utils/url";
-import mime from "../libs/mime/mime";
+import mime from "./utils/mime";
 import Path from "./utils/path";
 import path from "path-webpack";
 
@@ -141,8 +141,7 @@ class Resources {
 			}.bind(this));
 		}
 
-		var replacements = this.urls.
-			map( (url) => {
+		var replacements = this.urls.map( (url) => {
 				var absolute = this.settings.resolver(url);
 
 				return this.createUrl(absolute).

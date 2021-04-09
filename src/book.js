@@ -52,7 +52,8 @@ class Book {
 		// Allow passing just options to the Book
 		if (typeof(options) === "undefined" &&
 			  typeof(url) !== "string" &&
-		    url instanceof Blob === false) {
+		    url instanceof Blob === false &&
+		    url instanceof ArrayBuffer === false) {
 			options = url;
 			url = undefined;
 		}
@@ -660,20 +661,20 @@ class Book {
 
 	/**
 	 * Get the cover url
-	 * @return {string} coverUrl
+	 * @return {Promise<?string>} coverUrl
 	 */
 	coverUrl() {
-		var retrieved = this.loaded.cover.
-			then((url) => {
-				if(this.archived) {
-					// return this.archive.createUrl(this.cover);
-					return this.resources.get(this.cover);
-				}else{
-					return this.cover;
-				}
-			});
+		return this.loaded.cover.then(() => {
+			if (!this.cover) {
+				return null;
+			}
 
-		return retrieved;
+			if (this.archived) {
+				return this.archive.createUrl(this.cover);
+			} else {
+				return this.cover;
+			}
+		});
 	}
 
 	/**
@@ -695,7 +696,7 @@ class Book {
 	/**
 	 * Find a DOM Range for a given CFI Range
 	 * @param  {EpubCFI} cfiRange a epub cfi range
-	 * @return {Range}
+	 * @return {Promise}
 	 */
 	getRange(cfiRange) {
 		var cfi = new EpubCFI(cfiRange);

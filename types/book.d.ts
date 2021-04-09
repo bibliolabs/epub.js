@@ -65,13 +65,13 @@ export default class Book {
 
     canonical(path: string): string;
 
-    coverUrl(): string;
+    coverUrl(): Promise<string | null>;
 
     destroy(): void;
 
     determineType(input: string): string;
 
-    getRange(cfiRange: string): Range;
+    getRange(cfiRange: string): Promise<Range>;
 
     key(identifier?: string): string;
 

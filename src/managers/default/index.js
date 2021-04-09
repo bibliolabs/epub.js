@@ -1,5 +1,6 @@
 import EventEmitter from "event-emitter";
 import {extend, defer, windowBounds, isNumber} from "../../utils/core";
+import scrollType from "../../utils/scrolltype";
 import Mapping from "../../mapping";
 import Queue from "../../utils/queue";
 import Stage from "../helpers/stage";
@@ -22,6 +23,7 @@ class DefaultViewManager {
 			width: undefined,
 			height: undefined,
 			axis: undefined,
+			writingMode: undefined,
 			flow: "scrolled",
 			ignoreClass: "",
 			fullsize: undefined
@@ -59,6 +61,8 @@ class DefaultViewManager {
 		}
 
 		this.settings.size = size;
+
+		this.settings.rtlScrollType = scrollType();
 
 		// Save the stage
 		this.stage = new Stage({
@@ -228,8 +232,23 @@ class DefaultViewManager {
 		}, epubcfi);
 	}
 
-	createView(section) {
-		return new this.View(section, this.viewSettings);
+	createView(section, forceRight) {
+		return new this.View(section, extend(this.viewSettings, { forceRight }) );
+	}
+
+	handleNextPrePaginated(forceRight, section, action) {
+		let next;
+
+		if (this.layout.name === "pre-paginated" && this.layout.divisor > 1) {
+			if (forceRight || section.index === 0) {
+				// First page (cover) should stand alone for pre-paginated books
+				return;
+			}
+			next = section.next();
+			if (next && !next.properties.includes("page-spread-left")) {
+				return action.call(this, next);
+			}
+		}
 	}
 
 	display(section, target){
@@ -246,7 +265,7 @@ class DefaultViewManager {
 		var visible = this.views.find(section);
 
 		// View is already shown, just move to correct location in view
-		if(visible && section) {
+		if(visible && section && this.layout.name !== "pre-paginated") {
 			let offset = visible.offset();
 
 			if (this.settings.direction === "ltr") {
@@ -258,7 +277,8 @@ class DefaultViewManager {
 
 			if(target) {
 				let offset = visible.locationOf(target);
-				this.moveTo(offset);
+				let width = visible.width();
+				this.moveTo(offset, width);
 			}
 
 			displaying.resolve();
@@ -268,28 +288,26 @@ class DefaultViewManager {
 		// Hide all current views
 		this.clear();
 
-		this.add(section)
+		let forceRight = false;
+		if (this.layout.name === "pre-paginated" && this.layout.divisor === 2 && section.properties.includes("page-spread-right")) {
+			forceRight = true;
+		}
+
+		this.add(section, forceRight)
 			.then(function(view){
 
 				// Move to correct place within the section, if needed
 				if(target) {
 					let offset = view.locationOf(target);
-					this.moveTo(offset);
+					let width = view.width();
+					this.moveTo(offset, width);
 				}
 
 			}.bind(this), (err) => {
 				displaying.reject(err);
 			})
 			.then(function(){
-				var next;
-				if (this.layout.name === "pre-paginated" &&
-						this.layout.divisor > 1 && section.index > 0) {
-					// First page (cover) should stand alone for pre-paginated books
-					next = section.next();
-					if (next) {
-						return this.add(next);
-					}
-				}
+				return this.handleNextPrePaginated(forceRight, section, this.add);
 			}.bind(this))
 			.then(function(){
 
@@ -315,9 +333,9 @@ class DefaultViewManager {
 		this.emit(EVENTS.MANAGERS.RESIZE, view.section);
 	}
 
-	moveTo(offset){
+	moveTo(offset, width){
 		var distX = 0,
-			  distY = 0;
+				distY = 0;
 
 		if(!this.isPaginated) {
 			distY = offset.top;
@@ -327,12 +345,27 @@ class DefaultViewManager {
 			if (distX + this.layout.delta > this.container.scrollWidth) {
 				distX = this.container.scrollWidth - this.layout.delta;
 			}
+
+			distY = Math.floor(offset.top / this.layout.delta) * this.layout.delta;
+
+			if (distY + this.layout.delta > this.container.scrollHeight) {
+				distY = this.container.scrollHeight - this.layout.delta;
+			}
+		}
+		if(this.settings.direction === 'rtl'){
+			/***
+				the `floor` function above (L343) is on positive values, so we should add one `layout.delta` 
+				to distX or use `Math.ceil` function, or multiply offset.left by -1
+				before `Math.floor`
+			*/
+			distX = distX + this.layout.delta 
+			distX = distX - width
 		}
 		this.scrollTo(distX, distY, true);
 	}
 
-	add(section){
-		var view = this.createView(section);
+	add(section, forceRight){
+		var view = this.createView(section, forceRight);
 
 		this.views.append(view);
 
@@ -344,12 +377,15 @@ class DefaultViewManager {
 			this.updateAxis(axis);
 		});
 
-		return view.display(this.request);
+		view.on(EVENTS.VIEWS.WRITING_MODE, (mode) => {
+			this.updateWritingMode(mode);
+		});
 
+		return view.display(this.request);
 	}
 
-	append(section){
-		var view = this.createView(section);
+	append(section, forceRight){
+		var view = this.createView(section, forceRight);
 		this.views.append(view);
 
 		view.onDisplayed = this.afterDisplayed.bind(this);
@@ -359,11 +395,15 @@ class DefaultViewManager {
 			this.updateAxis(axis);
 		});
 
+		view.on(EVENTS.VIEWS.WRITING_MODE, (mode) => {
+			this.updateWritingMode(mode);
+		});
+
 		return view.display(this.request);
 	}
 
-	prepend(section){
-		var view = this.createView(section);
+	prepend(section, forceRight){
+		var view = this.createView(section, forceRight);
 
 		view.on(EVENTS.VIEWS.RESIZED, (bounds) => {
 			this.counter(bounds);
@@ -376,6 +416,10 @@ class DefaultViewManager {
 
 		view.on(EVENTS.VIEWS.AXIS, (axis) => {
 			this.updateAxis(axis);
+		});
+
+		view.on(EVENTS.VIEWS.WRITING_MODE, (mode) => {
+			this.updateWritingMode(mode);
 		});
 
 		return view.display(this.request);
@@ -423,12 +467,22 @@ class DefaultViewManager {
 
 			this.scrollLeft = this.container.scrollLeft;
 
-			left = this.container.scrollLeft;
+			if (this.settings.rtlScrollType === "default"){
+				left = this.container.scrollLeft;
 
-			if(left > 0) {
-				this.scrollBy(this.layout.delta, 0, true);
+				if (left > 0) {
+					this.scrollBy(this.layout.delta, 0, true);
+				} else {
+					next = this.views.last().section.next();
+				}
 			} else {
-				next = this.views.last().section.next();
+				left = this.container.scrollLeft + ( this.layout.delta * -1 );
+
+				if (left > this.container.scrollWidth * -1){
+					this.scrollBy(this.layout.delta, 0, true);
+				} else {
+					next = this.views.last().section.next();
+				}
 			}
 
 		} else if (this.isPaginated && this.settings.axis === "vertical") {
@@ -449,20 +503,30 @@ class DefaultViewManager {
 
 		if(next) {
 			this.clear();
+			// The new section may have a different writing-mode from the old section. Thus, we need to update layout.
+			this.updateLayout();
 
-			return this.append(next)
+			let forceRight = false;
+			if (this.layout.name === "pre-paginated" && this.layout.divisor === 2 && next.properties.includes("page-spread-right")) {
+				forceRight = true;
+			}
+
+			return this.append(next, forceRight)
 				.then(function(){
-					var right;
-					if (this.layout.name === "pre-paginated" && this.layout.divisor > 1) {
-						right = next.next();
-						if (right) {
-							return this.append(right);
-						}
-					}
+					return this.handleNextPrePaginated(forceRight, next, this.append);
 				}.bind(this), (err) => {
 					return err;
 				})
 				.then(function(){
+
+					// Reset position to start for scrolled-doc vertical-rl in default mode
+					if (!this.isPaginated &&
+						this.settings.axis === "horizontal" &&
+						this.settings.direction === "rtl" &&
+						this.settings.rtlScrollType === "default") {
+						
+						this.scrollTo(this.container.scrollWidth, 0, true);
+					}
 					this.views.show();
 				}.bind(this));
 		}
@@ -493,12 +557,23 @@ class DefaultViewManager {
 
 			this.scrollLeft = this.container.scrollLeft;
 
-			left = this.container.scrollLeft + this.container.offsetWidth + this.layout.delta;
+			if (this.settings.rtlScrollType === "default"){
+				left = this.container.scrollLeft + this.container.offsetWidth;
 
-			if(left <= this.container.scrollWidth) {
-				this.scrollBy(-this.layout.delta, 0, true);
-			} else {
-				prev = this.views.first().section.prev();
+				if (left < this.container.scrollWidth) {
+					this.scrollBy(-this.layout.delta, 0, true);
+				} else {
+					prev = this.views.first().section.prev();
+				}
+			}
+			else{
+				left = this.container.scrollLeft;
+
+				if (left < 0) {
+					this.scrollBy(-this.layout.delta, 0, true);
+				} else {
+					prev = this.views.first().section.prev();
+				}
 			}
 
 		} else if (this.isPaginated && this.settings.axis === "vertical") {
@@ -521,8 +596,15 @@ class DefaultViewManager {
 
 		if(prev) {
 			this.clear();
+			// The new section may have a different writing-mode from the old section. Thus, we need to update layout.
+			this.updateLayout();
 
-			return this.prepend(prev)
+			let forceRight = false;
+			if (this.layout.name === "pre-paginated" && this.layout.divisor === 2 && typeof prev.prev() !== "object") {
+				forceRight = true;
+			}
+
+			return this.prepend(prev, forceRight)
 				.then(function(){
 					var left;
 					if (this.layout.name === "pre-paginated" && this.layout.divisor > 1) {
@@ -537,7 +619,12 @@ class DefaultViewManager {
 				.then(function(){
 					if(this.isPaginated && this.settings.axis === "horizontal") {
 						if (this.settings.direction === "rtl") {
-							this.scrollTo(0, 0, true);
+							if (this.settings.rtlScrollType === "default"){
+								this.scrollTo(0, 0, true);
+							}
+							else{
+								this.scrollTo((this.container.scrollWidth * -1) + this.layout.delta, 0, true);
+							}
 						} else {
 							this.scrollTo(this.container.scrollWidth - this.layout.delta, 0, true);
 						}
@@ -568,11 +655,11 @@ class DefaultViewManager {
 	}
 
 	currentLocation(){
-
-		if (this.settings.axis === "vertical") {
-			this.location = this.scrolledLocation();
-		} else {
+		this.updateLayout();
+		if (this.isPaginated && this.settings.axis === "horizontal") {
 			this.location = this.paginatedLocation();
+		} else {
+			this.location = this.scrolledLocation();
 		}
 		return this.location;
 	}
@@ -581,31 +668,50 @@ class DefaultViewManager {
 		let visible = this.visible();
 		let container = this.container.getBoundingClientRect();
 		let pageHeight = (container.height < window.innerHeight) ? container.height : window.innerHeight;
-
+		let pageWidth = (container.width < window.innerWidth) ? container.width : window.innerWidth;
+		let vertical = (this.settings.axis === "vertical");
+		let rtl =  (this.settings.direction === "rtl"); 
+			
 		let offset = 0;
 		let used = 0;
 
 		if(this.settings.fullsize) {
-			offset = window.scrollY;
+			offset = vertical ? window.scrollY : window.scrollX;
 		}
 
 		let sections = visible.map((view) => {
 			let {index, href} = view.section;
 			let position = view.position();
+			let width = view.width();
 			let height = view.height();
 
-			let startPos = offset + container.top - position.top + used;
-			let endPos = startPos + pageHeight - used;
-			if (endPos > height) {
-				endPos = height;
-				used = (endPos - startPos);
+			let startPos;
+			let endPos;
+			let stopPos;
+			let totalPages;
+
+			if (vertical) {
+				startPos = offset + container.top - position.top + used;
+				endPos = startPos + pageHeight - used;
+				totalPages = this.layout.count(height, pageHeight).pages;
+				stopPos = pageHeight;
+			} else {
+				startPos = offset + container.left - position.left + used;
+				endPos = startPos + pageWidth - used;
+				totalPages = this.layout.count(width, pageWidth).pages;
+				stopPos = pageWidth;
 			}
 
-			let totalPages = this.layout.count(height, pageHeight).pages;
-
-			let currPage = Math.ceil(startPos / pageHeight);
+			let currPage = Math.ceil(startPos / stopPos);
 			let pages = [];
-			let endPage = Math.ceil(endPos / pageHeight);
+			let endPage = Math.ceil(endPos / stopPos);
+
+			// Reverse page counts for horizontal rtl
+			if (this.settings.direction === "rtl" && !vertical) {
+				let tempStartPage = currPage;
+				currPage = totalPages - endPage;
+				endPage = totalPages - tempStartPage;
+			}
 
 			pages = [];
 			for (var i = currPage; i <= endPage; i++) {
@@ -640,29 +746,36 @@ class DefaultViewManager {
 
 		let sections = visible.map((view) => {
 			let {index, href} = view.section;
-			let offset = view.offset().left;
-			let position = view.position().left;
+			let offset;
+			let position = view.position();
 			let width = view.width();
 
 			// Find mapping
-			let start = left + container.left - position + used;
-			let end = start + this.layout.width - used;
+			let start;
+			let end;
+			let pageWidth;
+
+			if (this.settings.direction === "rtl") {
+				offset = container.right - left;
+				pageWidth = Math.min(Math.abs(offset - position.left), this.layout.width) - used;
+				end = position.width - (position.right - offset) - used;
+				start = end - pageWidth;
+			} else {
+				offset = container.left + left;
+				pageWidth = Math.min(position.right - offset, this.layout.width) - used;
+				start = offset - position.left + used;
+				end = start + pageWidth;
+			}
+
+			used += pageWidth;
 
 			let mapping = this.mapping.page(view.contents, view.section.cfiBase, start, end);
-
-			// Find displayed pages
-			//console.log("pre", end, offset + width);
-			// if (end > offset + width) {
-			// 	end = offset + width;
-			// 	used = this.layout.pageWidth;
-			// }
-			// console.log("post", end);
 
 			let totalPages = this.layout.count(width).pages;
 			let startPage = Math.floor(start / this.layout.pageWidth);
 			let pages = [];
 			let endPage = Math.floor(end / this.layout.pageWidth);
-
+			
 			// start page should not be negative
 			if (startPage < 0) {
 				startPage = 0;
@@ -814,6 +927,9 @@ class DefaultViewManager {
 
 		this.layout = layout;
 		this.updateLayout();
+		if (this.views && this.views.length > 0 && this.layout.name === "pre-paginated") {
+			this.display(this.views.first().section);
+		}
 		 // this.manager.layout(this.layout.format);
 	}
 
@@ -835,7 +951,7 @@ class DefaultViewManager {
 			);
 
 			// Set the look ahead offset for what is visible
-			this.settings.offset = this.layout.delta;
+			this.settings.offset = this.layout.delta / this.layout.divisor;
 
 			// this.stage.addStyleRules("iframe", [{"margin-right" : this.layout.gap + "px"}]);
 
@@ -866,11 +982,11 @@ class DefaultViewManager {
 
 	}
 
-	updateAxis(axis, forceUpdate){
+	updateWritingMode(mode) {
+		this.writingMode = mode;
+	}
 
-		if (!this.isPaginated) {
-			axis = "vertical";
-		}
+	updateAxis(axis, forceUpdate){
 
 		if (!forceUpdate && axis === this.settings.axis) {
 			return;

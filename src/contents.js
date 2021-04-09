@@ -40,7 +40,8 @@ class Contents {
 		this.cfiBase = cfiBase || "";
 
 		this.epubReadingSystem("epub.js", EPUBJS_VERSION);
-
+		this.called = 0;
+		this.active = true;
 		this.listeners();
 	}
 
@@ -69,7 +70,7 @@ class Contents {
 			// this.content.style.width = w;
 		}
 
-		return this.window.getComputedStyle(frame)["width"];
+		return parseInt(this.window.getComputedStyle(frame)["width"]);
 
 
 	}
@@ -92,7 +93,7 @@ class Contents {
 			// this.content.style.height = h;
 		}
 
-		return this.window.getComputedStyle(frame)["height"];
+		return parseInt(this.window.getComputedStyle(frame)["height"]);
 
 	}
 
@@ -113,7 +114,7 @@ class Contents {
 			content.style.width = w;
 		}
 
-		return this.window.getComputedStyle(content)["width"];
+		return parseInt(this.window.getComputedStyle(content)["width"]);
 
 
 	}
@@ -135,7 +136,7 @@ class Contents {
 			content.style.height = h;
 		}
 
-		return this.window.getComputedStyle(content)["height"];
+		return parseInt(this.window.getComputedStyle(content)["height"]);
 
 	}
 
@@ -173,20 +174,11 @@ class Contents {
 		let height;
 		let range = this.document.createRange();
 		let content = this.content || this.document.body;
-		let border = borders(content);
 
 		range.selectNodeContents(content);
 
 		rect = range.getBoundingClientRect();
-		height = rect.height;
-
-		if (height && border.height) {
-			height += border.height;
-		}
-
-		if (height && rect.top) {
-			height += rect.top;
-		}
+		height = rect.bottom;
 
 		return Math.round(height);
 	}
@@ -400,9 +392,14 @@ class Contents {
 
 		// this.transitionListeners();
 
-		this.resizeListeners();
+		if (typeof ResizeObserver === "undefined") {
+			this.resizeListeners();
+			this.visibilityListeners();
+		} else {
+			this.resizeObservers();
+		}
 
-		// this.resizeObservers();
+		// this.mutationObservers();
 
 		this.linksHandler();
 	}
@@ -416,6 +413,10 @@ class Contents {
 		this.removeEventListeners();
 
 		this.removeSelectionListeners();
+
+		if (this.observer) {
+			this.observer.disconnect();
+		}
 
 		clearTimeout(this.expanding);
 	}
@@ -449,7 +450,24 @@ class Contents {
 		var width, height;
 		// Test size again
 		clearTimeout(this.expanding);
-    requestAnimationFrame(this.resizeCheck.bind(this));
+		requestAnimationFrame(this.resizeCheck.bind(this));
+		this.expanding = setTimeout(this.resizeListeners.bind(this), 350);
+	}
+
+	/**
+	 * Listen for visibility of tab to change
+	 * @private
+	 */
+	visibilityListeners() {
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible" && this.active === false) {
+				this.active = true;
+				this.resizeListeners();
+			} else {
+				this.active = false;
+				clearTimeout(this.expanding);
+			}
+		});
 	}
 
 	/**
@@ -502,10 +520,24 @@ class Contents {
 	}
 
 	/**
-	 * Use MutationObserver to listen for changes in the DOM and check for resize
+	 * Use ResizeObserver to listen for changes in the DOM and check for resize
 	 * @private
 	 */
 	resizeObservers() {
+		// create an observer instance
+		this.observer = new ResizeObserver((e) => {
+			requestAnimationFrame(this.resizeCheck.bind(this));
+		});
+
+		// pass in the target node
+		this.observer.observe(this.document.documentElement);
+	}
+
+	/**
+	 * Use MutationObserver to listen for changes in the DOM and check for resize
+	 * @private
+	 */
+	mutationObservers() {
 		// create an observer instance
 		this.observer = new MutationObserver((mutations) => {
 			this.resizeCheck();
@@ -577,10 +609,10 @@ class Contents {
 			if(range) {
 				try {
 					if (!range.endContainer ||
-						(range.startContainer == range.endContainer 
+						(range.startContainer == range.endContainer
 						&& range.startOffset == range.endOffset)) {
 						// If the end for the range is not set, it results in collapsed becoming
-						// true. This in turn leads to inconsistent behaviour when calling 
+						// true. This in turn leads to inconsistent behaviour when calling
 						// getBoundingRect. Wrong bounds lead to the wrong page being displayed.
 						// https://developer.microsoft.com/en-us/microsoft-edge/platform/issues/15684911/
 						let pos = range.startContainer.textContent.indexOf(" ", range.startOffset);
@@ -693,31 +725,52 @@ class Contents {
 		}.bind(this));
 	}
 
+	_getStylesheetNode(key) {
+		var styleEl;
+		key = "epubjs-inserted-css-" + (key || '');
+
+		if(!this.document) return false;
+
+		// Check if link already exists
+		styleEl = this.document.getElementById(key);
+		if (!styleEl) {
+			styleEl = this.document.createElement("style");
+			styleEl.id = key;
+			// Append style element to head
+			this.document.head.appendChild(styleEl);
+		}
+		return styleEl;
+	}
+
+	/**
+	 * Append stylesheet css
+	 * @param {string} serializedCss
+	 * @param {string} key If the key is the same, the CSS will be replaced instead of inserted
+	 */
+	addStylesheetCss(serializedCss, key) {
+		if(!this.document || !serializedCss) return false;
+
+		var styleEl;
+		styleEl = this._getStylesheetNode(key);
+		styleEl.innerHTML = serializedCss;
+
+		return true;
+	}
+
 	/**
 	 * Append stylesheet rules to a generate stylesheet
 	 * Array: https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet/insertRule
 	 * Object: https://github.com/desirable-objects/json-to-css
 	 * @param {array | object} rules
+	 * @param {string} key If the key is the same, the CSS will be replaced instead of inserted
 	 */
-	addStylesheetRules(rules) {
-		var styleEl;
+	addStylesheetRules(rules, key) {
 		var styleSheet;
-		var key = "epubjs-inserted-css";
 
 		if(!this.document || !rules || rules.length === 0) return;
 
-		// Check if link already exists
-		styleEl = this.document.getElementById("#"+key);
-		if (!styleEl) {
-			styleEl = this.document.createElement("style");
-			styleEl.id = key;
-		}
-
-		// Append style element to head
-		this.document.head.appendChild(styleEl);
-
 		// Grab style sheet
-		styleSheet = styleEl.sheet;
+		styleSheet = this._getStylesheetNode(key).sheet;
 
 		if (Object.prototype.toString.call(rules) === "[object Array]") {
 			for (var i = 0, rl = rules.length; i < rl; i++) {
@@ -994,7 +1047,7 @@ class Contents {
 	 * @param {number} columnWidth
 	 * @param {number} gap
 	 */
-	columns(width, height, columnWidth, gap){
+	columns(width, height, columnWidth, gap, dir){
 		let COLUMN_AXIS = prefixed("column-axis");
 		let COLUMN_GAP = prefixed("column-gap");
 		let COLUMN_WIDTH = prefixed("column-width");
@@ -1005,9 +1058,8 @@ class Contents {
 
 		this.layoutStyle("paginated");
 
-		// Fix body width issues if rtl is only set on body element
-		if (this.content.dir === "rtl") {
-			this.direction("rtl");
+		if (dir === "rtl" && axis === "horizontal") {
+			this.direction(dir);
 		}
 
 		this.width(width);
@@ -1028,17 +1080,18 @@ class Contents {
 			this.css("padding-bottom", (gap / 2) + "px", true);
 			this.css("padding-left", "20px");
 			this.css("padding-right", "20px");
+			this.css(COLUMN_AXIS, "vertical");
 		} else {
 			this.css("padding-top", "20px");
 			this.css("padding-bottom", "20px");
 			this.css("padding-left", (gap / 2) + "px", true);
 			this.css("padding-right", (gap / 2) + "px", true);
+			this.css(COLUMN_AXIS, "horizontal");
 		}
 
 		this.css("box-sizing", "border-box");
 		this.css("max-width", "inherit");
 
-		this.css(COLUMN_AXIS, "horizontal");
 		this.css(COLUMN_FILL, "auto");
 
 		this.css(COLUMN_GAP, gap+"px");
@@ -1073,7 +1126,7 @@ class Contents {
 	 * @param {number} width
 	 * @param {number} height
 	 */
-	fit(width, height){
+	fit(width, height, section){
 		var viewport = this.viewport();
 		var viewportWidth = parseInt(viewport.width);
 		var viewportHeight = parseInt(viewport.height);
@@ -1103,6 +1156,11 @@ class Contents {
 		this.css("background-size", viewportWidth * scale + "px " + viewportHeight * scale + "px");
 
 		this.css("background-color", "transparent");
+		if (section && section.properties.includes("page-spread-left")) {
+			// set margin since scale is weird
+			var marginLeft = width - (viewportWidth * scale);
+			this.css("margin-left", marginLeft + "px");
+		}
 	}
 
 	/**
@@ -1194,12 +1252,7 @@ class Contents {
 	}
 
 	destroy() {
-		// Stop observing
-		if(this.observer) {
-			this.observer.disconnect();
-		}
-
-		this.document.removeEventListener('transitionend', this._resizeCheck);
+		// this.document.removeEventListener('transitionend', this._resizeCheck);
 
 		this.removeListeners();
 
